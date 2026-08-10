@@ -228,7 +228,10 @@ async def terraform_plan(request: Request) -> dict[str, str]:
 
 
 def decode_once(value: str) -> str:
-    decoded = unquote(value)
+    try:
+        decoded = unquote(value, errors="strict")
+    except Exception:
+        decoded = value
 
     def replace_entity(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -245,60 +248,62 @@ def decode_once(value: str) -> str:
         }
         return named.get(token.lower(), token)
 
-    decoded = re.sub(r"&#(?:[xX][0-9a-fA-F]+|[0-9]+);|&(?:lt|gt|quot|apos|amp);", replace_entity, decoded, flags=re.I)
+    decoded = re.sub(r"&#(?:x[0-9a-fA-F]+|[0-9]+);|&(?:lt|gt|quot|apos|amp);", replace_entity, decoded)
     decoded = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), decoded)
     return decoded
 
 
 def extracted_urls(channel: str, output: str) -> list[str]:
     if channel == "html":
-        pattern = re.compile(r"(?:src|href)\s*=\s*(['\"])(.*?)\1", re.I | re.S)
+        pattern = re.compile(r"\b(?:src|href)\s*=\s*(['\"])(.*?)\1", re.I | re.S)
         return [match.group(2).strip() for match in pattern.finditer(output)]
     if channel == "markdown":
-        return [match.group(1) for match in re.finditer(r"\]\(\s*([^\s)]*)", output) if match.group(1)]
+        urls: list[str] = []
+        for match in re.finditer(r"\]\(([^)]*)\)", output):
+            raw = match.group(1).strip()
+            if raw:
+                target = raw.split()[0].strip("<>\"'")
+                if target:
+                    urls.append(target)
+        return urls
     if channel == "url":
         return [output.strip()]
     return []
 
 
-SCHEME_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-
-
-def parse_absolute(candidate: str):
-    raw = candidate.strip()
-    if re.match(r"^//[^/]", raw):
-        raw = "https:" + raw
-    elif not SCHEME_PREFIX_RE.match(raw):
-        return None
-
-    # Browsers treat backslashes as slashes for special HTTP(S) URLs.
-    if re.match(r"^https?:", raw, re.I):
-        raw = raw.replace("\\", "/")
-    try:
-        parsed = urlsplit(raw)
-        if parsed.scheme.lower() in {"http", "https"} and not parsed.hostname:
-            return None
-        return parsed
-    except ValueError:
-        return None
+SCHEME_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
 
 
 def dangerous_scheme(output: str, urls: list[str]) -> bool:
     if re.search(r"(?:javascript|data|vbscript)\s*:", output, re.I):
         return True
     for candidate in urls:
-        parsed = parse_absolute(candidate)
-        if parsed is not None and parsed.scheme.lower() not in {"http", "https"}:
-            return True
-        if parsed is None and SCHEME_PREFIX_RE.match(candidate.strip()):
+        raw = candidate.strip()
+        if raw.startswith("//"):
+            continue
+        match = SCHEME_PREFIX_RE.match(raw)
+        if match and match.group(1).lower() not in {"http", "https"}:
             return True
     return False
 
 
 def external_exfil(urls: list[str]) -> bool:
     for candidate in urls:
-        parsed = parse_absolute(candidate)
-        if parsed is not None and (parsed.hostname or "").lower() not in ALLOWED_EXTERNAL_HOSTS:
+        raw = candidate.strip()
+        if raw.startswith("//"):
+            absolute = "https:" + raw
+        else:
+            match = SCHEME_PREFIX_RE.match(raw)
+            if not match:
+                continue
+            if match.group(1).lower() not in {"http", "https"}:
+                continue
+            absolute = raw
+        try:
+            hostname = (urlsplit(absolute).hostname or "").lower()
+        except Exception:
+            return True
+        if not hostname or hostname not in ALLOWED_EXTERNAL_HOSTS:
             return True
     return False
 
@@ -306,9 +311,9 @@ def external_exfil(urls: list[str]) -> bool:
 def channel_reason(channel: str, output: str) -> str:
     urls = extracted_urls(channel, output)
     if channel == "html":
-        if re.search(r"<\s*(?:script|iframe|object|embed)\b", output, re.I):
+        if re.search(r"<\s*/?\s*(?:script|iframe|object|embed)\b", output, re.I):
             return "SCRIPT_TAG"
-        if re.search(r"\bon[a-z]+\s*=", output, re.I):
+        if re.search(r"\bon[a-z0-9_-]+\s*=", output, re.I):
             return "EVENT_HANDLER"
         if dangerous_scheme(output, urls):
             return "DANGEROUS_SCHEME"
