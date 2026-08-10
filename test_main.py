@@ -87,6 +87,8 @@ def test_output_sanitizer():
     assert client.post("/sanitize-output", json={"channel": "url", "output": r"https:\\attacker.example\x"}).json()["reason"] == "EXTERNAL_EXFIL"
     assert client.post("/sanitize-output", json={"channel": "html", "output": "onclick=alert(1)"}).json()["reason"] == "EVENT_HANDLER"
     assert client.post("/sanitize-output", json={"channel": "html", "output": "onload&#61;alert(1)"}).json()["reason"] == "ENCODED_PAYLOAD"
+    assert client.post("/sanitize-output", json={"channel": "markdown", "output": "[x](<https://attacker.example/x>)"}).json()["reason"] == "EXTERNAL_EXFIL"
+    assert client.post("/sanitize-output", json={"channel": "html", "output": '<img src="https://">'}).json()["reason"] == "EXTERNAL_EXFIL"
 
 
 def test_corroboration():
