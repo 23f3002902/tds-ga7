@@ -252,10 +252,21 @@ def decode_once(value: str) -> str:
 
 def extracted_urls(channel: str, output: str) -> list[str]:
     if channel == "html":
-        pattern = re.compile(r"\b(?:src|href)\s*=\s*(['\"])(.*?)\1", re.I | re.S)
+        # Only exact src/href attributes count.  In particular, data-src and
+        # aria-href are different attributes and must not be treated as fetches.
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_:-])(?:src|href)\s*=\s*(['\"])(.*?)\1",
+            re.I | re.S,
+        )
         return [match.group(2).strip() for match in pattern.finditer(output)]
     if channel == "markdown":
-        return [match.group(1).strip() for match in re.finditer(r"\]\(\s*([^\s)]+)(?:\s+['\"][^)]*['\"])?\s*\)", output, re.S)]
+        targets: list[str] = []
+        for match in re.finditer(r"\]\(\s*(<[^>]*>|[^\s)]+)(?:\s+['\"][^)]*['\"])?\s*\)", output, re.S):
+            target = match.group(1).strip()
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1].strip()
+            targets.append(target)
+        return targets
     if channel == "url":
         return [output.strip()]
     return []
@@ -277,10 +288,15 @@ def external_exfil(urls: list[str]) -> bool:
         absolute = candidate
         if candidate.startswith("//"):
             absolute = "https:" + candidate
-        parsed = urlsplit(absolute)
-        if parsed.scheme.lower() in {"http", "https"}:
-            hostname = (parsed.hostname or "").lower()
-            if hostname not in ALLOWED_EXTERNAL_HOSTS:
+        try:
+            parsed = urlsplit(absolute)
+            if parsed.scheme.lower() in {"http", "https"}:
+                hostname = (parsed.hostname or "").lower()
+                if hostname not in ALLOWED_EXTERNAL_HOSTS:
+                    return True
+        except ValueError:
+            # A malformed absolute URL cannot have an allowlisted parsed host.
+            if re.match(r"^(?:https?:)?//", absolute, re.I):
                 return True
     return False
 
@@ -290,7 +306,7 @@ def channel_reason(channel: str, output: str) -> str:
     if channel == "html":
         if re.search(r"<\s*(?:script|iframe|object|embed)\b", output, re.I):
             return "SCRIPT_TAG"
-        if re.search(r"\son[a-z0-9_-]+\s*=", output, re.I):
+        if re.search(r"(?:\s|/)on[a-z0-9_-]+\s*=", output, re.I):
             return "EVENT_HANDLER"
         if dangerous_scheme(output, urls):
             return "DANGEROUS_SCHEME"
@@ -403,4 +419,3 @@ async def corroborate(request: Request) -> dict[str, Any]:
             "corroboratingSources": sorted(source["id"] for source in reps),
         }
     return {"verdict": "unverified", "confidence": "low", "corroboratingSources": []}
-
