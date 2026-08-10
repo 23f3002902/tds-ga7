@@ -308,7 +308,7 @@ def channel_reason(channel: str, output: str) -> str:
     if channel == "html":
         if re.search(r"<\s*(?:script|iframe|object|embed)\b", output, re.I):
             return "SCRIPT_TAG"
-        if re.search(r"\son[a-z]+\s*=", output, re.I):
+        if re.search(r"\bon[a-z]+\s*=", output, re.I):
             return "EVENT_HANDLER"
         if dangerous_scheme(output, urls):
             return "DANGEROUS_SCHEME"
