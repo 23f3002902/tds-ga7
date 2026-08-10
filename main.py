@@ -252,52 +252,54 @@ def decode_once(value: str) -> str:
 
 def extracted_urls(channel: str, output: str) -> list[str]:
     if channel == "html":
-        # Only exact src/href attributes count.  In particular, data-src and
-        # aria-href are different attributes and must not be treated as fetches.
-        pattern = re.compile(
-            r"(?<![A-Za-z0-9_:-])(?:src|href)\s*=\s*(['\"])(.*?)\1",
-            re.I | re.S,
-        )
+        pattern = re.compile(r"(?:src|href)\s*=\s*(['\"])(.*?)\1", re.I | re.S)
         return [match.group(2).strip() for match in pattern.finditer(output)]
     if channel == "markdown":
-        targets: list[str] = []
-        for match in re.finditer(r"\]\(\s*(<[^>]*>|[^\s)]+)(?:\s+['\"][^)]*['\"])?\s*\)", output, re.S):
-            target = match.group(1).strip()
-            if target.startswith("<") and target.endswith(">"):
-                target = target[1:-1].strip()
-            targets.append(target)
-        return targets
+        return [match.group(1) for match in re.finditer(r"\]\(\s*([^\s)]*)", output) if match.group(1)]
     if channel == "url":
         return [output.strip()]
     return []
+
+
+SCHEME_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def parse_absolute(candidate: str):
+    raw = candidate.strip()
+    if re.match(r"^//[^/]", raw):
+        raw = "https:" + raw
+    elif not SCHEME_PREFIX_RE.match(raw):
+        return None
+
+    # Browsers treat backslashes as slashes for special HTTP(S) URLs.
+    if re.match(r"^https?:", raw, re.I):
+        raw = raw.replace("\\", "/")
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() in {"http", "https"} and not parsed.hostname:
+            return None
+        return parsed
+    except ValueError:
+        return None
 
 
 def dangerous_scheme(output: str, urls: list[str]) -> bool:
     if re.search(r"(?:javascript|data|vbscript)\s*:", output, re.I):
         return True
     for candidate in urls:
-        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*\s*:", candidate):
-            scheme = candidate.split(":", 1)[0].strip().lower()
-            if scheme not in {"http", "https"}:
-                return True
+        parsed = parse_absolute(candidate)
+        if parsed is not None and parsed.scheme.lower() not in {"http", "https"}:
+            return True
+        if parsed is None and SCHEME_PREFIX_RE.match(candidate.strip()):
+            return True
     return False
 
 
 def external_exfil(urls: list[str]) -> bool:
     for candidate in urls:
-        absolute = candidate
-        if candidate.startswith("//"):
-            absolute = "https:" + candidate
-        try:
-            parsed = urlsplit(absolute)
-            if parsed.scheme.lower() in {"http", "https"}:
-                hostname = (parsed.hostname or "").lower()
-                if hostname not in ALLOWED_EXTERNAL_HOSTS:
-                    return True
-        except ValueError:
-            # A malformed absolute URL cannot have an allowlisted parsed host.
-            if re.match(r"^(?:https?:)?//", absolute, re.I):
-                return True
+        parsed = parse_absolute(candidate)
+        if parsed is not None and (parsed.hostname or "").lower() not in ALLOWED_EXTERNAL_HOSTS:
+            return True
     return False
 
 
@@ -306,7 +308,7 @@ def channel_reason(channel: str, output: str) -> str:
     if channel == "html":
         if re.search(r"<\s*(?:script|iframe|object|embed)\b", output, re.I):
             return "SCRIPT_TAG"
-        if re.search(r"(?:\s|/)on[a-z0-9_-]+\s*=", output, re.I):
+        if re.search(r"\son[a-z]+\s*=", output, re.I):
             return "EVENT_HANDLER"
         if dangerous_scheme(output, urls):
             return "DANGEROUS_SCHEME"
