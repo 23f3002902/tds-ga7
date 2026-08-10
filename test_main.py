@@ -82,9 +82,9 @@ def test_output_sanitizer():
     assert client.post("/sanitize-output", json={"channel": "url", "output": "https://cdn-bsaff2l.example.evil/x"}).json()["reason"] == "EXTERNAL_EXFIL"
     assert client.post("/sanitize-output", json={"channel": "html", "output": "%3Cscript%3Ealert(1)%3C/script%3E"}).json()["reason"] == "ENCODED_PAYLOAD"
     assert client.post("/sanitize-output", json={"channel": "shell", "output": "echo ${HOME}"}).json()["reason"] == "SHELL_METACHAR"
-    assert client.post("/sanitize-output", json={"channel": "html", "output": '<svg/onload=alert(1)>'}).json()["reason"] == "EVENT_HANDLER"
-    assert client.post("/sanitize-output", json={"channel": "html", "output": '<img data-src="https://attacker.example/x">'}).json()["reason"] == "SAFE"
-    assert client.post("/sanitize-output", json={"channel": "markdown", "output": '[x](<https://attacker.example/x>)'}).json()["reason"] == "EXTERNAL_EXFIL"
+    assert client.post("/sanitize-output", json={"channel": "url", "output": "mailto:person@example.com"}).json()["reason"] == "DANGEROUS_SCHEME"
+    assert client.post("/sanitize-output", json={"channel": "url", "output": "//attacker.example/x"}).json()["reason"] == "EXTERNAL_EXFIL"
+    assert client.post("/sanitize-output", json={"channel": "url", "output": r"https:\\attacker.example\x"}).json()["reason"] == "EXTERNAL_EXFIL"
 
 
 def test_corroboration():
