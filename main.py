@@ -336,21 +336,27 @@ def channel_reason(channel: str, output: str) -> str:
 @app.post("/sanitize-output")
 async def sanitize_output(request: Request) -> dict[str, Any]:
     body = await json_body(request)
+    diagnostic_channel = body.get("channel") if isinstance(body, dict) else "invalid"
+
+    def result(reason: str) -> dict[str, Any]:
+        print(f"SANITIZER_RESULT channel={diagnostic_channel} reason={reason}", flush=True)
+        return {"safe": reason == "SAFE", "reason": reason}
+
     if (
         not isinstance(body, dict)
         or body.get("channel") not in {"html", "markdown", "url", "sql", "shell"}
         or not isinstance(body.get("output"), str)
         or len(body.get("output", "")) > 20_000
     ):
-        return {"safe": False, "reason": "INVALID_SCHEMA"}
+        return result("INVALID_SCHEMA")
 
     channel = body["channel"]
     output = body["output"]
     decoded = decode_once(output)
     if decoded != output and channel_reason(channel, decoded) != "SAFE":
-        return {"safe": False, "reason": "ENCODED_PAYLOAD"}
+        return result("ENCODED_PAYLOAD")
     reason = channel_reason(channel, output)
-    return {"safe": reason == "SAFE", "reason": reason}
+    return result(reason)
 
 
 def parse_timestamp(value: str) -> datetime | None:
